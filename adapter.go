@@ -21,6 +21,21 @@ func WithCustomQuitKey(keys ...string) WrapOption {
 	}
 }
 
+// WithAutoFocus enables or disables automatic focus invocation on focusable models.
+func WithAutoFocus(enable bool) WrapOption {
+	return func(a *ModelAdapter) {
+		a.autoFocus = enable
+	}
+}
+
+// WithInitialSize sets initial canvas dimensions before initialization.
+func WithInitialSize(width, height int) WrapOption {
+	return func(a *ModelAdapter) {
+		a.width = width
+		a.height = height
+	}
+}
+
 // ModelAdapter wraps any standard tea.Model into a Storybook Instance with mock quit and restart.
 type ModelAdapter struct {
 	inner          tea.Model
@@ -29,12 +44,14 @@ type ModelAdapter struct {
 	customQuitKeys []string
 	width          int
 	height         int
+	autoFocus      bool
 }
 
 // WrapModel wraps a standard Bubble Tea model into an Instance.
 func WrapModel(m tea.Model, opts ...WrapOption) *ModelAdapter {
 	a := &ModelAdapter{
-		inner: m,
+		inner:     m,
+		autoFocus: true,
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -42,12 +59,41 @@ func WrapModel(m tea.Model, opts ...WrapOption) *ModelAdapter {
 	return a
 }
 
-// Init initializes the inner model.
+// Init initializes the inner model and dispatches any initial commands or focus triggers.
 func (a *ModelAdapter) Init() tea.Cmd {
 	if a.inner == nil {
 		return nil
 	}
-	return a.inner.Init()
+	var cmds []tea.Cmd
+	if a.width > 0 && a.height > 0 {
+		a.SetSize(a.width, a.height)
+	}
+	if cmd := a.inner.Init(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if a.autoFocus {
+		if cmd := a.triggerFocus(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	if len(cmds) == 1 {
+		return cmds[0]
+	}
+	return tea.Batch(cmds...)
+}
+
+func (a *ModelAdapter) triggerFocus() tea.Cmd {
+	if f, ok := a.inner.(Focusable); ok {
+		return f.Focus()
+	}
+	if f, ok := a.inner.(SimpleFocusable); ok {
+		f.Focus()
+		return nil
+	}
+	return nil
 }
 
 // Update handles messages, intercepts tea.Quit, and manages restart triggers.
@@ -125,6 +171,13 @@ func (a *ModelAdapter) SetSize(width, height int) {
 	}
 }
 
+// SetState delivers state changes to inner models implementing Stateful.
+func (a *ModelAdapter) SetState(stateIndex int) {
+	if s, ok := a.inner.(Stateful); ok {
+		s.SetState(stateIndex)
+	}
+}
+
 // Restart resets the model state and re-invokes Init().
 func (a *ModelAdapter) Restart() tea.Cmd {
 	a.quitting = false
@@ -146,6 +199,12 @@ func (a *ModelAdapter) HandleKey(key tea.KeyMsg) (tea.Cmd, bool) {
 	if a.inner == nil {
 		return nil, false
 	}
+	if a.autoFocus {
+		_ = a.triggerFocus()
+	}
+	if h, ok := a.inner.(InteractiveHandler); ok {
+		return h.HandleKey(key)
+	}
 	var cmd tea.Cmd
 	_, cmd = a.Update(key)
 	return cmd, true
@@ -155,6 +214,9 @@ func (a *ModelAdapter) HandleKey(key tea.KeyMsg) (tea.Cmd, bool) {
 func (a *ModelAdapter) HandleMouse(ev tea.MouseMsg) (tea.Cmd, bool) {
 	if a.inner == nil {
 		return nil, false
+	}
+	if h, ok := a.inner.(MouseHandler); ok {
+		return h.HandleMouse(ev)
 	}
 	var cmd tea.Cmd
 	_, cmd = a.Update(ev)

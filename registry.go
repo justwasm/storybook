@@ -3,6 +3,8 @@ package storybook
 import (
 	"strings"
 	"sync"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // NavItem represents a row in the sidebar list (either a category header or a story).
@@ -228,4 +230,62 @@ func (r *Registry) VisibleNavItems(filterQuery string) []NavItem {
 		}
 	}
 	return items
+}
+
+// StoryOption configures optional metadata on a Story.
+type StoryOption func(*Story)
+
+// WithDescription sets the component purpose and role.
+func WithDescription(desc string) StoryOption {
+	return func(s *Story) { s.Description = desc }
+}
+
+// WithLevel sets the Atomic Design hierarchy level of a story.
+func WithLevel(lvl AtomicLevel) StoryOption {
+	return func(s *Story) { s.Level = lvl }
+}
+
+// WithUpstream sets the upstream source reference or file path.
+func WithUpstream(ref string) StoryOption {
+	return func(s *Story) { s.UpstreamRef = ref }
+}
+
+// WithSourceCode sets the source code snippet for the source tab.
+func WithSourceCode(src string) StoryOption {
+	return func(s *Story) { s.SourceCode = src }
+}
+
+// WithDoc sets the documentation or architectural notes.
+func WithDoc(doc string) StoryOption {
+	return func(s *Story) { s.Doc = doc }
+}
+
+// WithKeyFeatures sets the key bullet points for the architecture tab.
+func WithKeyFeatures(features ...string) StoryOption {
+	return func(s *Story) { s.KeyFeatures = features }
+}
+
+// WithStates sets the state variations for dual-axis navigation (1..9 keys).
+func WithStates(states ...State) StoryOption {
+	return func(s *Story) { s.States = states }
+}
+
+// RegisterModel registers a standard Bubble Tea v2 model factory with automatic
+// lifecycle adaptation, canvas resizing, mouse coordinate translation, and mock-quit isolation.
+func RegisterModel(id, name string, cat Category, factory func() tea.Model, opts ...StoryOption) Story {
+	story := Story{
+		ID:       id,
+		Name:     name,
+		Category: cat,
+		Level:    LevelComponent,
+		Factory: func() Instance {
+			m := factory()
+			return WrapModel(m, WithResetFactory(factory))
+		},
+	}
+	for _, opt := range opts {
+		opt(&story)
+	}
+	Register(story)
+	return story
 }

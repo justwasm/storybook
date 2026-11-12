@@ -510,3 +510,69 @@ func TestModel_MouseCoordinateTranslation(t *testing.T) {
 		t.Fatalf("expected translated mouse coords (10, 5), got (%d, %d)", inst.lastMouse.X, inst.lastMouse.Y)
 	}
 }
+
+type focusableTestModel struct {
+	focused bool
+	resized bool
+	w, h    int
+}
+
+func (m *focusableTestModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m *focusableTestModel) Focus() tea.Cmd {
+	m.focused = true
+	return nil
+}
+
+func (m *focusableTestModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if ws, ok := msg.(tea.WindowSizeMsg); ok {
+		m.resized = true
+		m.w = ws.Width
+		m.h = ws.Height
+	}
+	return m, nil
+}
+
+func (m *focusableTestModel) View() tea.View {
+	return tea.NewView("Focusable Content")
+}
+
+func TestRegisterModel_ZeroInvasiveAndAutoFocus(t *testing.T) {
+	origReg := DefaultRegistry
+	DefaultRegistry = NewRegistry()
+	defer func() { DefaultRegistry = origReg }()
+
+	var capturedModel *focusableTestModel
+	story := RegisterModel("focus-demo", "Focus Demo", CategoryForms, func() tea.Model {
+		m := &focusableTestModel{}
+		capturedModel = m
+		return m
+	},
+		WithDescription("Tests zero-invasive auto focus and sizing"),
+		WithLevel(LevelAtom),
+	)
+
+	if story.ID != "focus-demo" || story.Level != LevelAtom {
+		t.Fatalf("expected registered story ID 'focus-demo' and LevelAtom, got %s / %v", story.ID, story.Level)
+	}
+
+	inst := story.Factory()
+	adapter, ok := inst.(*ModelAdapter)
+	if !ok {
+		t.Fatalf("expected instance to be *ModelAdapter, got %T", inst)
+	}
+
+	// Sizing delivered
+	adapter.SetSize(80, 24)
+	if !capturedModel.resized || capturedModel.w != 80 || capturedModel.h != 24 {
+		t.Fatalf("expected model resized to 80x24, got %v (%dx%d)", capturedModel.resized, capturedModel.w, capturedModel.h)
+	}
+
+	// Auto-focus triggered on Init()
+	adapter.Init()
+	if !capturedModel.focused {
+		t.Fatalf("expected focusable model to be auto-focused")
+	}
+}

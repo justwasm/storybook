@@ -117,6 +117,16 @@ type Initializer interface {
 	Init() tea.Cmd
 }
 
+// Focusable is an optional interface for instances that accept focus with an optional command.
+type Focusable interface {
+	Focus() tea.Cmd
+}
+
+// SimpleFocusable is an optional interface for instances with parameterless Focus.
+type SimpleFocusable interface {
+	Focus()
+}
+
 // Story defines a single component or example exhibit in the Storybook catalogue.
 type Story struct {
 	ID          string                  // Unique identifier, e.g. "simple"
