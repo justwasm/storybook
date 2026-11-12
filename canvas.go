@@ -129,15 +129,15 @@ func RenderCanvas(story *Story, activeTab ViewTab, stateIdx int, interactive boo
 	modeBadge := ""
 	if interactive {
 		if activeTab == TabSourceCode {
-			modeBadge = green(bold(" ● SOURCE: Drag to Auto-Copy | Esc: Back "))
+			modeBadge = green(bold(" ● SOURCE: Auto-Copy | Esc: Back "))
 		} else {
-			modeBadge = green(bold(" ● INTERACTIVE: Press Esc to return "))
+			modeBadge = green(bold(" ● INTERACTIVE: Esc to return "))
 		}
 	} else {
 		if activeTab == TabSourceCode {
-			modeBadge = dim(" ○ [Enter: Focus & Copy | Tab: View | q: Quit] ")
+			modeBadge = dim(" ○ [Enter: Focus | Tab: View | q: Quit] ")
 		} else {
-			modeBadge = dim(" ○ [Enter: Interact | Tab: View/State | /: Filter | q: Quit] ")
+			modeBadge = dim(" ○ [Enter: Focus | Tab: State | /: Filter | q: Quit] ")
 		}
 	}
 

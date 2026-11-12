@@ -8,6 +8,7 @@ import (
 
 	"github.com/atotto/clipboard"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Model is the top-level Elm Architecture model for Storybook.
@@ -426,9 +427,16 @@ func (m *Model) RenderViewString() string {
 		modeIndicator = dim("○ NAV ")
 	}
 
-	titleText := fmt.Sprintf(" %s %s%s", m.title, modeIndicator, dim("— Component Catalog & Playground"))
+	titleText := fmt.Sprintf(" %s %s", m.title, modeIndicator)
 	themeText := cyan(fmt.Sprintf("Theme: %s [T] ", theme.Name))
-	topBar := PadOrTruncateANSI(titleText, layout.TotalWidth-len(theme.Name)-12) + themeText
+	titleW := ansi.StringWidth(titleText)
+	themeW := ansi.StringWidth(themeText)
+	gapW := layout.TotalWidth - titleW - themeW
+	if gapW < 1 {
+		gapW = 1
+		titleText = ansi.Truncate(titleText, layout.TotalWidth-themeW-1, "")
+	}
+	topBar := titleText + strings.Repeat(" ", gapW) + themeText
 
 	// Left: Sidebar
 	sidebarContent := RenderSidebar(items, m.activeIdx, m.sidebarScroll, layout.SidebarWidth, layout.BodyHeight, m.searching, m.filterQuery, m.interactive, theme)
