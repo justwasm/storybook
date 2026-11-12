@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ViewTab represents the active inspection tab on the right canvas.
@@ -16,122 +16,152 @@ const (
 	TabArchitectureInfo
 )
 
-// Canvas handles rendering the component viewport, source code viewer, and architecture info tab.
-type Canvas struct {
-	width  int
-	height int
-	theme  Theme
-}
-
-// NewCanvas creates a new canvas viewport manager.
-func NewCanvas(width, height int, theme Theme) *Canvas {
-	return &Canvas{
-		width:  width,
-		height: height,
-		theme:  theme,
-	}
-}
-
-// RenderHeader renders the breadcrumbs and theme indicator at the top of the canvas.
-func (c *Canvas) RenderHeader(story *Story, interactive bool, theme Theme) string {
-	w := c.width
-	if w <= 0 {
-		return ""
+// RenderCanvas draws the preview canvas area with breadcrumb header, component viewport, and controls bar.
+func RenderCanvas(story *Story, activeTab ViewTab, stateIdx int, interactive bool, theme Theme, viewContent string, sourceCode string, sourceScroll int, copyNotice string, width, height int) string {
+	if story == nil {
+		return renderEmptyCanvas(width, height)
 	}
 
-	left := ""
-	if story != nil {
-		modePill := ""
-		if interactive {
-			modePill = " " + lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#1a1b26")).
-				Background(theme.Accent).
-				Bold(true).
-				Render("INTERACTIVE · Esc to return")
+	var lines []string
+
+	// 1. Breadcrumb & upstream header bar (Row 0)
+	var focusIcon string
+	var focusHint string
+	if interactive {
+		focusIcon = green(bold("● "))
+		focusHint = green(bold("(INTERACTIVE · Esc to return)"))
+	} else {
+		focusIcon = dim("○ ")
+		focusHint = dim("(Enter to interact)")
+	}
+
+	catStr := dim(string(story.Category) + " > ")
+	nameStr := bold(cyan(story.Name))
+	levelBadge := ""
+	if story.Level != "" {
+		levelBadge = " " + yellow(story.Level.ShortTag())
+	}
+	pathStr := ""
+	if story.UpstreamRef != "" {
+		pathStr = dim("[" + story.UpstreamRef + "]")
+	}
+
+	headerLeft := " " + focusIcon + catStr + nameStr + levelBadge + " " + focusHint
+	headerRight := pathStr + " "
+	if activeTab == TabSourceCode {
+		headerRight = dim("[Scroll: ↑↓/PgDn/Wheel]") + " " + pathStr + " "
+	}
+
+	headerLeftW := ansi.StringWidth(headerLeft)
+	headerRightW := ansi.StringWidth(headerRight)
+
+	gapW := width - headerLeftW - headerRightW
+	if gapW < 1 {
+		gapW = 1
+	}
+	headerRow := headerLeft + strings.Repeat(" ", gapW) + headerRight
+	lines = append(lines, headerRow)
+
+	// Row 1: The right horizontal arm of the "十字" (Cross)
+	sepLine := dim(strings.Repeat("─", width))
+	if interactive {
+		sepLine = cyan(strings.Repeat("─", width))
+	}
+	lines = append(lines, sepLine)
+
+	// Content Rows = height - header(1) - topSep(1) - bottomSep(1) - controls(1) = height - 4
+	contentHeight := height - 4
+	if contentHeight < 2 {
+		contentHeight = 2
+	}
+
+	// 2. Component Content Area (Rows 2 .. height - 3)
+	var bodyText string
+	switch activeTab {
+	case TabLiveDemo:
+		bodyText = viewContent
+	case TabSourceCode:
+		bodyText = renderSourceCodeLines(sourceCode, sourceScroll, copyNotice, width, contentHeight)
+	case TabArchitectureInfo:
+		bodyText = renderInfoContent(story, width, contentHeight)
+	}
+
+	contentLines := strings.Split(bodyText, "\n")
+	for r := 0; r < contentHeight; r++ {
+		if r < len(contentLines) {
+			lines = append(lines, contentLines[r])
+		} else {
+			lines = append(lines, "")
 		}
-		catName := string(story.Category)
-		left = fmt.Sprintf(" %s > %s%s", catName, story.Name, modePill)
 	}
 
-	right := fmt.Sprintf("Theme: %s [T] ", theme.Name)
-	if story != nil && story.UpstreamRef != "" {
-		right = fmt.Sprintf("[%s]  %s", story.UpstreamRef, right)
-	}
+	// 3. Separator above controls (Row height - 2)
+	lines = append(lines, dim(strings.Repeat("─", width)))
 
-	gap := w - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
-	}
-
-	headerStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(theme.Fg).
-		Background(theme.HeaderBg)
-
-	line := left + strings.Repeat(" ", gap) + right
-	return headerStyle.Render(PadOrTruncate(line, w))
-}
-
-// RenderTabs renders the 3-state navigation tabs (`[1] Live Demo`, `[2] Source Code`, `[3] Architecture & Info`).
-func (c *Canvas) RenderTabs(activeTab ViewTab, stateIdx int, states []State) string {
-	w := c.width
-	if w <= 0 {
-		return ""
-	}
-
-	tabDemo := " [1] Live Demo "
-	tabSource := " [2] Source Code "
-	tabInfo := " [3] Architecture & Info "
-
-	activeStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(c.theme.SelectedFg).
-		Background(c.theme.SelectedBg)
-
-	inactiveStyle := lipgloss.NewStyle().
-		Foreground(c.theme.Muted)
+	// 4. Controls & States line (Row height - 1)
+	tabDemo := "[1] Live Demo"
+	tabSource := "[2] Source Code"
+	tabInfo := "[3] Architecture & Info"
 
 	switch activeTab {
 	case TabLiveDemo:
-		tabDemo = activeStyle.Render(tabDemo)
-		tabSource = inactiveStyle.Render(tabSource)
-		tabInfo = inactiveStyle.Render(tabInfo)
+		tabDemo = reverse(bold(" " + tabDemo + " "))
+		tabSource = dim(tabSource)
+		tabInfo = dim(tabInfo)
 	case TabSourceCode:
-		tabDemo = inactiveStyle.Render(tabDemo)
-		tabSource = activeStyle.Render(tabSource)
-		tabInfo = inactiveStyle.Render(tabInfo)
+		tabDemo = dim(tabDemo)
+		tabSource = reverse(bold(" " + tabSource + " "))
+		tabInfo = dim(tabInfo)
 	case TabArchitectureInfo:
-		tabDemo = inactiveStyle.Render(tabDemo)
-		tabSource = inactiveStyle.Render(tabSource)
-		tabInfo = activeStyle.Render(tabInfo)
+		tabDemo = dim(tabDemo)
+		tabSource = dim(tabSource)
+		tabInfo = reverse(bold(" " + tabInfo + " "))
 	}
 
-	tabsLine := tabDemo + " " + tabSource + " " + tabInfo
+	tabsBar := " " + tabDemo + "  " + tabSource + "  " + tabInfo
 
-	// If there are state presets, show them on the right
-	if len(states) > 0 && activeTab == TabLiveDemo {
-		statePill := fmt.Sprintf("State: [%d/%d] %s ", stateIdx+1, len(states), states[stateIdx].Name)
-		gap := w - lipgloss.Width(tabsLine) - len(statePill)
-		if gap > 0 {
-			tabsLine += strings.Repeat(" ", gap) + lipgloss.NewStyle().Foreground(c.theme.Accent).Render(statePill)
+	// If there are state presets, append them
+	if len(story.States) > 0 && activeTab == TabLiveDemo {
+		stateBadge := fmt.Sprintf("State: [%d/%d] %s", stateIdx+1, len(story.States), story.States[stateIdx].Name)
+		tabsBar += "  " + yellow(stateBadge)
+	}
+
+	modeBadge := ""
+	if interactive {
+		if activeTab == TabSourceCode {
+			modeBadge = green(bold(" ● SOURCE: Drag to Auto-Copy | Esc: Back "))
+		} else {
+			modeBadge = green(bold(" ● INTERACTIVE: Press Esc to return "))
+		}
+	} else {
+		if activeTab == TabSourceCode {
+			modeBadge = dim(" ○ [Enter: Focus & Copy | Tab: View | q: Quit] ")
+		} else {
+			modeBadge = dim(" ○ [Enter: Interact | Tab: View/State | /: Filter | q: Quit] ")
 		}
 	}
 
-	return PadOrTruncate(tabsLine, w)
+	tabsW := ansi.StringWidth(tabsBar)
+	modeW := ansi.StringWidth(modeBadge)
+	ctrlGap := width - tabsW - modeW
+	if ctrlGap < 1 {
+		ctrlGap = 1
+	}
+	controlsLine := tabsBar + strings.Repeat(" ", ctrlGap) + modeBadge
+	lines = append(lines, controlsLine)
+
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+
+	return strings.Join(lines, "\n")
 }
 
-// RenderSourceCode renders the formatted source code with line number gutters and scroll offset.
-func (c *Canvas) RenderSourceCode(sourceCode string, scrollOffset int, copyNotice string, availableH int) string {
-	w := c.width
-	if w <= 0 || availableH <= 0 {
-		return ""
-	}
-
+func renderSourceCodeLines(sourceCode string, scrollOffset int, copyNotice string, width, height int) string {
 	if strings.TrimSpace(sourceCode) == "" {
-		return lipgloss.NewStyle().Foreground(c.theme.Muted).Render("  (No source code embedded for this component)")
+		return dim("  (No source code embedded for this component)")
 	}
 
-	// Expand tabs to 4 spaces for consistent terminal alignment
 	expanded := strings.ReplaceAll(sourceCode, "\t", "    ")
 	rawLines := strings.Split(expanded, "\n")
 	totalLines := len(rawLines)
@@ -147,64 +177,45 @@ func (c *Canvas) RenderSourceCode(sourceCode string, scrollOffset int, copyNotic
 	gutterFmt := fmt.Sprintf("%%%dd │ ", maxDigits)
 
 	var lines []string
-
 	if copyNotice != "" {
-		noticeStyle := lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#73daca")).
-			Background(c.theme.SelectedBg)
-		lines = append(lines, PadOrTruncate(noticeStyle.Render(" "+copyNotice+" "), w))
+		lines = append(lines, green(bold(" "+copyNotice+" ")))
 	}
 
-	for i := 0; i < availableH-len(lines); i++ {
+	for i := 0; i < height-len(lines); i++ {
 		lineIdx := scrollOffset + i
 		if lineIdx < totalLines {
-			gutter := lipgloss.NewStyle().
-				Foreground(c.theme.CodeGutterFg).
-				Background(c.theme.CodeGutterBg).
-				Render(fmt.Sprintf(gutterFmt, lineIdx+1))
-
-			codeText := rawLines[lineIdx]
-			rendered := gutter + codeText
-			lines = append(lines, PadOrTruncate(rendered, w))
+			gutter := dim(fmt.Sprintf(gutterFmt, lineIdx+1))
+			lines = append(lines, gutter+rawLines[lineIdx])
 		} else {
-			lines = append(lines, strings.Repeat(" ", w))
+			lines = append(lines, "")
 		}
 	}
 
 	return strings.Join(lines, "\n")
 }
 
-// RenderInfoTab renders metadata, component documentation, atomic design role, and shortcuts.
-func (c *Canvas) RenderInfoTab(story *Story) string {
-	w := c.width
-	if w <= 0 || story == nil {
+func renderInfoContent(story *Story, width, height int) string {
+	if story == nil {
 		return ""
 	}
 
 	var lines []string
-
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(c.theme.Accent)
-	boldLabel := func(k, v string) string {
-		return fmt.Sprintf("  %s %s", lipgloss.NewStyle().Bold(true).Foreground(c.theme.Fg).Render(k), v)
-	}
-
 	lines = append(lines, "")
-	lines = append(lines, titleStyle.Render(fmt.Sprintf("  ❖ %s", story.Name)))
+	lines = append(lines, bold(cyan(fmt.Sprintf("  ❖ %s", story.Name))))
 	lines = append(lines, "")
-	lines = append(lines, boldLabel("ID:          ", story.ID))
-	lines = append(lines, boldLabel("Category:    ", string(story.Category)))
+	lines = append(lines, fmt.Sprintf("  %s %s", bold("ID:          "), story.ID))
+	lines = append(lines, fmt.Sprintf("  %s %s", bold("Category:    "), string(story.Category)))
 	if story.Level != "" {
-		lines = append(lines, boldLabel("Atomic Level:", fmt.Sprintf("%s %s", story.Level.LevelTag(), story.Level)))
+		lines = append(lines, fmt.Sprintf("  %s %s (%s)", bold("Atomic Level:"), yellow(story.Level.LevelTag()), story.Level))
 	}
 	if story.UpstreamRef != "" {
-		lines = append(lines, boldLabel("Upstream Ref:", story.UpstreamRef))
+		lines = append(lines, fmt.Sprintf("  %s %s", bold("Upstream Ref:"), story.UpstreamRef))
 	}
-	lines = append(lines, boldLabel("Description: ", story.Description))
+	lines = append(lines, fmt.Sprintf("  %s %s", bold("Description: "), story.Description))
 	lines = append(lines, "")
 
 	if story.Doc != "" {
-		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(c.theme.CategoryFg).Render("  ── Architecture & Details ──"))
+		lines = append(lines, bold(blue("  ── Architecture & Details ──")))
 		lines = append(lines, "")
 		for _, docLine := range strings.Split(story.Doc, "\n") {
 			lines = append(lines, "  "+docLine)
@@ -213,49 +224,32 @@ func (c *Canvas) RenderInfoTab(story *Story) string {
 	}
 
 	if len(story.States) > 0 {
-		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(c.theme.CategoryFg).Render("  ── Preset States ──"))
+		lines = append(lines, bold(blue("  ── Preset States ──")))
 		for i, st := range story.States {
 			lines = append(lines, fmt.Sprintf("  [%d] %s: %s", i+1, st.Name, st.Description))
 		}
 		lines = append(lines, "")
 	}
 
-	lines = append(lines, lipgloss.NewStyle().Foreground(c.theme.Muted).Render("  ── Shortcuts ──"))
-	lines = append(lines, "  • Enter / l: Enter interactive playground")
-	lines = append(lines, "  • 1 / 2 / 3: Switch view tabs (Demo, Source, Info)")
-	lines = append(lines, "  • Tab:       Cycle state presets or tabs")
-	lines = append(lines, "  • t:         Switch theme")
-	lines = append(lines, "  • Esc:       Exit playground back to sidebar")
+	lines = append(lines, dim("  ── Shortcuts ──"))
+	lines = append(lines, dim("  • Enter / l: Enter interactive playground"))
+	lines = append(lines, dim("  • 1 / 2 / 3: Switch view tabs (Demo, Source, Info)"))
+	lines = append(lines, dim("  • Tab:       Cycle state presets or tabs"))
+	lines = append(lines, dim("  • t:         Switch theme"))
+	lines = append(lines, dim("  • Esc:       Exit playground back to sidebar"))
 
-	var output []string
-	for _, l := range lines {
-		output = append(output, PadOrTruncate(l, w))
-	}
-	return strings.Join(output, "\n")
+	return strings.Join(lines, "\n")
 }
 
-// RenderFooter renders the bottom status bar.
-func (c *Canvas) RenderFooter(interactive bool) string {
-	w := c.width
-	if w <= 0 {
-		return ""
+func renderEmptyCanvas(width, height int) string {
+	var lines []string
+	header := bold(cyan(" PREVIEW CANVAS"))
+	lines = append(lines, " "+header)
+	lines = append(lines, dim(strings.Repeat("─", width)))
+	emptyMsg := dim("No story selected. Use Up/Down or / to filter stories.")
+	lines = append(lines, " "+emptyMsg)
+	for len(lines) < height {
+		lines = append(lines, "")
 	}
-
-	statusText := "  [1] Live Demo   [2] Source Code   [3] Architecture & Info   "
-	if interactive {
-		statusText += lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#73daca")).
-			Render("● INTERACTIVE: Press Esc to return to sidebar")
-	} else {
-		statusText += lipgloss.NewStyle().
-			Foreground(c.theme.Muted).
-			Render("↑/↓: Nav • Enter: Interact • /: Search • t: Theme • q: Quit")
-	}
-
-	statusStyle := lipgloss.NewStyle().
-		Background(c.theme.StatusBg).
-		Foreground(c.theme.StatusFg)
-
-	return statusStyle.Render(PadOrTruncate(statusText, w))
+	return strings.Join(lines[:height], "\n")
 }

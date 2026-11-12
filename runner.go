@@ -47,6 +47,9 @@ func Run(opts ...RunOption) error {
 	}
 
 	model := NewModel(cfg.registry)
+	if cfg.title != "" {
+		model.SetTitle(cfg.title)
+	}
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("storybook: error running interactive program: %w", err)

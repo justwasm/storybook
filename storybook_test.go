@@ -200,3 +200,52 @@ func TestModel_NavigationAndTabs(t *testing.T) {
 		t.Errorf("expected view to contain inner model output, got:\n%s", view)
 	}
 }
+
+func TestModel_CrossLayoutAndAltScreen(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(Story{
+		ID:          "simple",
+		Name:        "simple",
+		Category:    CategoryBasics,
+		Description: "A simple story",
+		Factory: func() Instance {
+			return WrapModel(&testModel{})
+		},
+	})
+
+	m := NewModel(reg)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	v := m.View()
+	if !v.AltScreen {
+		t.Errorf("expected v.AltScreen to be true for clean full-terminal presentation")
+	}
+
+	lines := strings.Split(v.Content, "\n")
+	if len(lines) < 4 {
+		t.Fatalf("expected at least 4 lines, got %d", len(lines))
+	}
+
+	// Line 0 is top title bar
+	if !strings.Contains(lines[0], "Theme:") {
+		t.Errorf("line 0 should contain top title bar, got: %s", lines[0])
+	}
+
+	// Line 1 is header row with STORIES and breadcrumb
+	if !strings.Contains(lines[1], "STORIES") || !strings.Contains(lines[1], "│") {
+		t.Errorf("line 1 should contain STORIES and divider │, got: %s", lines[1])
+	}
+
+	// Line 2 is the horizontal cross bar of the "十字"!
+	// It should contain ─── on both sides of the vertical divider │
+	if !strings.Contains(lines[2], "───") || !strings.Contains(lines[2], "│") {
+		t.Errorf("line 2 should be the horizontal cross bar containing ─── and │, got: %s", lines[2])
+	}
+
+	// Test quitting resets AltScreen
+	m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	quitView := m.View()
+	if quitView.AltScreen {
+		t.Errorf("expected quitView.AltScreen to be false upon exit")
+	}
+}

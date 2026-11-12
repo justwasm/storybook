@@ -8,13 +8,14 @@ import (
 
 	"github.com/atotto/clipboard"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 )
 
 // Model is the top-level Elm Architecture model for Storybook.
 type Model struct {
+	title          string
 	registry       *Registry
 	activeIdx      int
+	sidebarScroll  int
 	activeStory    *Story
 	activeInstance Instance
 	activeTab      ViewTab
@@ -26,7 +27,7 @@ type Model struct {
 	themeIdx       int
 	width          int
 	height         int
-	sidebarWidth   int
+	quitting       bool
 	copyNotice     string
 
 	// Mouse text selection for Source Code tab
@@ -46,12 +47,12 @@ func NewModel(reg ...*Registry) *Model {
 	}
 
 	m := &Model{
-		registry:     r,
-		activeTab:    TabLiveDemo,
-		themeIdx:     0,
-		sidebarWidth: 32,
-		width:        100,
-		height:       30,
+		title:     "❖ Terminal Component Storybook",
+		registry:  r,
+		activeTab: TabLiveDemo,
+		themeIdx:  0,
+		width:     100,
+		height:    30,
 	}
 
 	// Auto-select first story
@@ -66,6 +67,11 @@ func NewModel(reg ...*Registry) *Model {
 	}
 
 	return m
+}
+
+// SetTitle configures the window title prefix.
+func (m *Model) SetTitle(title string) {
+	m.title = title
 }
 
 // CurrentTheme returns the active Theme.
@@ -113,21 +119,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateDimensions() {
-	if m.width > 120 {
-		m.sidebarWidth = 34
-	} else if m.width > 90 {
-		m.sidebarWidth = 30
-	} else {
-		m.sidebarWidth = 24
-	}
-
+	layout := ComputeLayout(m.width, m.height)
 	if m.activeInstance != nil {
-		canvasW := m.width - m.sidebarWidth - 1
-		canvasH := m.height - 4
-		if canvasW > 0 && canvasH > 0 {
-			if r, ok := m.activeInstance.(Resizable); ok {
-				r.SetSize(canvasW, canvasH)
-			}
+		if r, ok := m.activeInstance.(Resizable); ok {
+			r.SetSize(layout.CanvasWidth, layout.CanvasContentHeight)
 		}
 	}
 }
@@ -162,6 +157,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.searching = false
 			m.filterQuery = ""
+			m.adjustSelectionAfterFilter()
 			return m, nil
 		case "enter":
 			m.searching = false
@@ -184,6 +180,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// 3. Normal Sidebar Navigation Mode
 	switch key {
 	case "ctrl+c", "q":
+		m.quitting = true
 		return m, tea.Quit
 
 	case "up", "k":
@@ -310,17 +307,15 @@ func (m *Model) loadActiveStory() {
 
 	m.activeInstance = m.activeStory.Factory()
 
-	canvasW := m.width - m.sidebarWidth - 1
-	canvasH := m.height - 4
-	if canvasW > 0 && canvasH > 0 {
-		if r, ok := m.activeInstance.(Resizable); ok {
-			r.SetSize(canvasW, canvasH)
-		}
+	layout := ComputeLayout(m.width, m.height)
+	if r, ok := m.activeInstance.(Resizable); ok {
+		r.SetSize(layout.CanvasWidth, layout.CanvasContentHeight)
 	}
 }
 
 func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	mouse := msg.Mouse()
+	layout := ComputeLayout(m.width, m.height)
 
 	// If in Live Demo tab and interactive, forward mouse to active instance
 	if m.activeTab == TabLiveDemo && m.interactive && m.activeInstance != nil {
@@ -331,7 +326,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// If in Source Code tab, handle scrolling and drag selection
-	if m.activeTab == TabSourceCode && m.activeStory != nil && m.activeStory.SourceCode != "" {
+	if m.activeTab == TabSourceCode && m.activeStory != nil {
 		switch mouse.Button {
 		case tea.MouseWheelUp:
 			m.sourceScroll -= 3
@@ -344,8 +339,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Drag-to-select and copy text
-		if mouse.X > m.sidebarWidth {
+		if mouse.X > layout.SidebarWidth {
 			switch msg.(type) {
 			case tea.MouseClickMsg:
 				if mouse.Button == tea.MouseLeft {
@@ -370,10 +364,17 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) copySelectedSourceText() {
-	if m.activeStory == nil || m.activeStory.SourceCode == "" {
+	src := ""
+	if m.activeStory != nil {
+		src = m.activeStory.SourceCode
+		if src == "" && m.activeStory.UpstreamRef != "" {
+			src = loadUpstreamSource(m.activeStory.UpstreamRef)
+		}
+	}
+	if src == "" {
 		return
 	}
-	lines := strings.Split(m.activeStory.SourceCode, "\n")
+	lines := strings.Split(src, "\n")
 	start := m.selStartLine
 	end := m.selEndLine
 	if start > end {
@@ -395,95 +396,68 @@ func (m *Model) copySelectedSourceText() {
 	}
 }
 
-// View renders the dual-pane storybook layout.
+// View renders the dual-pane storybook layout with Altscreen enabled.
 func (m *Model) View() tea.View {
-	return tea.NewView(m.RenderViewString())
+	if m.quitting {
+		v := tea.NewView("")
+		v.AltScreen = false
+		return v
+	}
+
+	fullView := m.RenderViewString()
+	v := tea.NewView(fullView)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeAllMotion
+	v.DisableBracketedPasteMode = false
+	return v
 }
 
 // RenderViewString renders the dual-pane storybook layout as a plain string.
 func (m *Model) RenderViewString() string {
+	layout := ComputeLayout(m.width, m.height)
 	theme := m.CurrentTheme()
 	items := m.registry.VisibleNavItems(m.filterQuery)
 
-	sidebarH := m.height - 1
-	if sidebarH < 5 {
-		sidebarH = 5
-	}
-	sidebarView := NewSidebar(m.sidebarWidth, sidebarH, theme).
-		Render(items, m.activeIdx, m.filterQuery, m.searching)
-
-	canvasW := m.width - m.sidebarWidth - 1
-	if canvasW < 10 {
-		canvasW = 10
-	}
-	canvasH := m.height - 4
-	if canvasH < 5 {
-		canvasH = 5
+	// Top Title Bar (Row 0 across full TotalWidth)
+	var modeIndicator string
+	if m.interactive {
+		modeIndicator = green(bold("● INTERACTIVE "))
+	} else {
+		modeIndicator = dim("○ NAV ")
 	}
 
-	canvas := NewCanvas(canvasW, canvasH, theme)
+	titleText := fmt.Sprintf(" %s %s%s", m.title, modeIndicator, dim("— Component Catalog & Playground"))
+	themeText := cyan(fmt.Sprintf("Theme: %s [T] ", theme.Name))
+	topBar := PadOrTruncateANSI(titleText, layout.TotalWidth-len(theme.Name)-12) + themeText
 
-	// Header + Tabs
-	headerLine := canvas.RenderHeader(m.activeStory, m.interactive, theme)
-	var states []State
+	// Left: Sidebar
+	sidebarContent := RenderSidebar(items, m.activeIdx, m.sidebarScroll, layout.SidebarWidth, layout.BodyHeight, m.searching, m.filterQuery, m.interactive, theme)
+
+	// Right: Canvas
+	viewBody := ""
+	if m.activeInstance != nil {
+		viewBody = m.activeInstance.View()
+	}
+	srcCode := ""
 	if m.activeStory != nil {
-		states = m.activeStory.States
-	}
-	tabsLine := canvas.RenderTabs(m.activeTab, m.stateIdx, states)
-
-	// Content
-	var content string
-	switch m.activeTab {
-	case TabLiveDemo:
-		if m.activeInstance != nil {
-			content = m.activeInstance.View()
-		} else {
-			content = lipgloss.NewStyle().Foreground(theme.Muted).Render("  (No component instance loaded)")
-		}
-	case TabSourceCode:
-		src := ""
-		if m.activeStory != nil {
-			src = m.activeStory.SourceCode
-			if src == "" && m.activeStory.UpstreamRef != "" {
-				src = loadUpstreamSource(m.activeStory.UpstreamRef)
-			}
-		}
-		content = canvas.RenderSourceCode(src, m.sourceScroll, m.copyNotice, canvasH)
-	case TabArchitectureInfo:
-		content = canvas.RenderInfoTab(m.activeStory)
-	}
-
-	// Footer
-	footerLine := canvas.RenderFooter(m.interactive)
-
-	// Combine right-hand canvas view
-	rightPaneLines := []string{
-		headerLine,
-		tabsLine,
-		lipgloss.NewStyle().Foreground(theme.Border).Render(strings.Repeat("─", canvasW)),
-	}
-
-	contentLines := strings.Split(content, "\n")
-	for i := 0; i < canvasH; i++ {
-		if i < len(contentLines) {
-			rightPaneLines = append(rightPaneLines, PadOrTruncate(contentLines[i], canvasW))
-		} else {
-			rightPaneLines = append(rightPaneLines, strings.Repeat(" ", canvasW))
+		srcCode = m.activeStory.SourceCode
+		if srcCode == "" && m.activeStory.UpstreamRef != "" {
+			srcCode = loadUpstreamSource(m.activeStory.UpstreamRef)
 		}
 	}
-	rightPaneLines = append(rightPaneLines, footerLine)
+	canvasContent := RenderCanvas(m.activeStory, m.activeTab, m.stateIdx, m.interactive, theme, viewBody, srcCode, m.sourceScroll, m.copyNotice, layout.CanvasWidth, layout.BodyHeight)
 
-	rightPane := strings.Join(rightPaneLines, "\n")
+	// Combine Columns via JoinColumns: creates the continuous "十字" (Cross) at Body Row 1!
+	body := JoinColumns(sidebarContent, layout.SidebarWidth, canvasContent, layout.CanvasWidth, layout.BodyHeight, dim("│"))
 
-	// Join Left Sidebar and Right Pane with vertical divider
-	sepStyle := lipgloss.NewStyle().Foreground(theme.Border)
-	vsep := sepStyle.Render("│")
+	fullView := topBar + "\n" + body
+	lines := strings.Split(fullView, "\n")
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+		fullView = strings.Join(lines, "\n")
+	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		sidebarView,
-		vsep,
-		rightPane,
-	)
+	return fullView
 }
 
 // ActiveStory returns the currently selected Story.
