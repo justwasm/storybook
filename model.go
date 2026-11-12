@@ -8,7 +8,6 @@ import (
 
 	"github.com/atotto/clipboard"
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 )
 
 // Model is the top-level Elm Architecture model for Storybook.
@@ -48,7 +47,7 @@ func NewModel(reg ...*Registry) *Model {
 	}
 
 	m := &Model{
-		title:     "❖ Terminal Component Storybook",
+		title:     "❖ Storybook",
 		registry:  r,
 		activeTab: TabLiveDemo,
 		themeIdx:  0,
@@ -184,6 +183,13 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 
+	case "esc":
+		if m.filterQuery != "" {
+			m.filterQuery = ""
+			m.adjustSelectionAfterFilter()
+		}
+		return m, nil
+
 	case "up", "k":
 		m.moveNav(-1)
 		return m, nil
@@ -268,6 +274,20 @@ func (m *Model) moveNav(delta int) {
 	}
 
 	m.activeIdx = newIdx
+
+	// Sync scroll window with selection
+	layout := ComputeLayout(m.width, m.height)
+	availRows := layout.BodyHeight - 2
+	if availRows < 1 {
+		availRows = 1
+	}
+	if m.activeIdx < m.sidebarScroll {
+		m.sidebarScroll = m.activeIdx
+	}
+	if m.activeIdx >= m.sidebarScroll+availRows {
+		m.sidebarScroll = m.activeIdx - availRows + 1
+	}
+
 	it := items[newIdx]
 	if !it.IsCategory && it.Story != nil && it.Story != m.activeStory {
 		m.activeStory = it.Story
@@ -317,7 +337,43 @@ func (m *Model) loadActiveStory() {
 func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	mouse := msg.Mouse()
 	layout := ComputeLayout(m.width, m.height)
+	items := m.registry.VisibleNavItems(m.filterQuery)
 
+	// 1. Mouse in Left Sidebar (mouse.X < layout.SidebarWidth)
+	if mouse.X < layout.SidebarWidth {
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			m.moveNav(-1)
+			return m, nil
+		case tea.MouseWheelDown:
+			m.moveNav(1)
+			return m, nil
+		case tea.MouseLeft:
+			// Row 0 is top title, row 1 is header ("STORIES"), row 2 is divider ("───").
+			// Items start at screen Y = 3.
+			rowOffset := mouse.Y - 3
+			if rowOffset >= 0 {
+				targetIdx := m.sidebarScroll + rowOffset
+				if targetIdx >= 0 && targetIdx < len(items) {
+					m.activeIdx = targetIdx
+					it := items[targetIdx]
+					if it.IsCategory {
+						m.registry.ToggleCategory(it.Category)
+					} else if it.Story != nil && it.Story != m.activeStory {
+						m.activeStory = it.Story
+						m.stateIdx = 0
+						m.sourceScroll = 0
+						m.copyNotice = ""
+						m.loadActiveStory()
+					}
+				}
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// 2. Mouse in Right Canvas (mouse.X >= layout.SidebarWidth)
 	// If in Live Demo tab and interactive, forward mouse to active instance
 	if m.activeTab == TabLiveDemo && m.interactive && m.activeInstance != nil {
 		if mh, ok := m.activeInstance.(MouseHandler); ok {
@@ -326,37 +382,68 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// If in Source Code tab, handle scrolling and drag selection
-	if m.activeTab == TabSourceCode && m.activeStory != nil {
-		switch mouse.Button {
-		case tea.MouseWheelUp:
+	// Clicking canvas in Live Demo enters interactive mode
+	if m.activeTab == TabLiveDemo && !m.interactive && mouse.Button == tea.MouseLeft {
+		if mouse.Y >= 3 && mouse.Y < m.height-2 {
+			m.interactive = true
+			return m, nil
+		}
+	}
+
+	// Clicking bottom tabs row:
+	if mouse.Y >= m.height-2 && mouse.Button == tea.MouseLeft {
+		relX := mouse.X - layout.SidebarWidth - 1
+		if relX >= 0 && relX < 16 {
+			m.activeTab = TabLiveDemo
+			return m, nil
+		} else if relX >= 16 && relX < 34 {
+			m.activeTab = TabSourceCode
+			return m, nil
+		} else if relX >= 34 && relX < 58 {
+			m.activeTab = TabArchitectureInfo
+			return m, nil
+		}
+	}
+
+	// Mouse Wheel in Canvas:
+	switch mouse.Button {
+	case tea.MouseWheelUp:
+		if m.activeTab == TabSourceCode {
 			m.sourceScroll -= 3
 			if m.sourceScroll < 0 {
 				m.sourceScroll = 0
 			}
 			return m, nil
-		case tea.MouseWheelDown:
+		}
+	case tea.MouseWheelDown:
+		if m.activeTab == TabSourceCode {
 			m.sourceScroll += 3
 			return m, nil
 		}
+	}
 
-		if mouse.X > layout.SidebarWidth {
-			switch msg.(type) {
-			case tea.MouseClickMsg:
-				if mouse.Button == tea.MouseLeft {
-					m.selecting = true
-					m.hasSelection = false
-					m.selStartLine = m.sourceScroll + (mouse.Y - 2)
-					m.selEndLine = m.selStartLine
-					return m, nil
-				}
-			case tea.MouseReleaseMsg:
-				if m.selecting {
-					m.selecting = false
-					m.selEndLine = m.sourceScroll + (mouse.Y - 2)
-					m.copySelectedSourceText()
-					return m, nil
-				}
+	// Drag-to-select and copy text in Source Code tab
+	if m.activeTab == TabSourceCode && m.activeStory != nil {
+		switch msg.(type) {
+		case tea.MouseClickMsg:
+			if mouse.Button == tea.MouseLeft {
+				m.selecting = true
+				m.hasSelection = false
+				m.selStartLine = m.sourceScroll + (mouse.Y - 2)
+				m.selEndLine = m.selStartLine
+				return m, nil
+			}
+		case tea.MouseMotionMsg:
+			if m.selecting {
+				m.selEndLine = m.sourceScroll + (mouse.Y - 2)
+				return m, nil
+			}
+		case tea.MouseReleaseMsg:
+			if m.selecting {
+				m.selecting = false
+				m.selEndLine = m.sourceScroll + (mouse.Y - 2)
+				m.copySelectedSourceText()
+				return m, nil
 			}
 		}
 	}
@@ -419,7 +506,7 @@ func (m *Model) RenderViewString() string {
 	theme := m.CurrentTheme()
 	items := m.registry.VisibleNavItems(m.filterQuery)
 
-	// Top Title Bar (Row 0 across full TotalWidth)
+	// Clean Top Title Bar (Row 0 across full TotalWidth)
 	var modeIndicator string
 	if m.interactive {
 		modeIndicator = green(bold("● INTERACTIVE "))
@@ -427,16 +514,8 @@ func (m *Model) RenderViewString() string {
 		modeIndicator = dim("○ NAV ")
 	}
 
-	titleText := fmt.Sprintf(" %s %s", m.title, modeIndicator)
-	themeText := cyan(fmt.Sprintf("Theme: %s [T] ", theme.Name))
-	titleW := ansi.StringWidth(titleText)
-	themeW := ansi.StringWidth(themeText)
-	gapW := layout.TotalWidth - titleW - themeW
-	if gapW < 1 {
-		gapW = 1
-		titleText = ansi.Truncate(titleText, layout.TotalWidth-themeW-1, "")
-	}
-	topBar := titleText + strings.Repeat(" ", gapW) + themeText
+	titleText := fmt.Sprintf(" %s %s%s", m.title, modeIndicator, dim("— Component Catalog & Playground"))
+	topBar := PadOrTruncateANSI(titleText, layout.TotalWidth)
 
 	// Left: Sidebar
 	sidebarContent := RenderSidebar(items, m.activeIdx, m.sidebarScroll, layout.SidebarWidth, layout.BodyHeight, m.searching, m.filterQuery, m.interactive, theme)
@@ -485,7 +564,6 @@ func loadUpstreamSource(ref string) string {
 		filepath.Join(ref, "plugin.go"),
 	}
 
-	// Try relative from current dir, and upwards up to 5 levels
 	prefixes := []string{"", ".", "..", "../..", "../../.."}
 	for _, pref := range prefixes {
 		for _, cand := range candidates {

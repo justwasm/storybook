@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Dummy model for testing
@@ -227,7 +228,7 @@ func TestModel_CrossLayoutAndAltScreen(t *testing.T) {
 	}
 
 	// Line 0 is top title bar
-	if !strings.Contains(lines[0], "Theme:") {
+	if !strings.Contains(lines[0], "Storybook") {
 		t.Errorf("line 0 should contain top title bar, got: %s", lines[0])
 	}
 
@@ -242,10 +243,84 @@ func TestModel_CrossLayoutAndAltScreen(t *testing.T) {
 		t.Errorf("line 2 should be the horizontal cross bar containing ─── and │, got: %s", lines[2])
 	}
 
+	// Bottom row contains tabs and theme indicator
+	lastLine := lines[len(lines)-1]
+	if !strings.Contains(lastLine, "Tokyo Night") {
+		t.Errorf("bottom line should contain theme indicator, got: %s", lastLine)
+	}
+
 	// Test quitting resets AltScreen
 	m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	quitView := m.View()
 	if quitView.AltScreen {
 		t.Errorf("expected quitView.AltScreen to be false upon exit")
+	}
+}
+
+func TestModel_MouseWheelAndNoLineOverflow(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(Story{
+		ID:          "story-1",
+		Name:        "Story One",
+		Category:    CategoryBasics,
+		Description: "First story",
+		SourceCode:  "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12",
+		Factory: func() Instance {
+			return WrapModel(&testModel{})
+		},
+	})
+	reg.Register(Story{
+		ID:          "story-2",
+		Name:        "Story Two",
+		Category:    CategoryBasics,
+		Description: "Second story",
+		SourceCode:  "package main\n\nfunc main() {\n\t// Very long line that should be clamped and never bleed into left sidebar or wrap onto column 0\n\tprintln(\"1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890\")\n}",
+		Factory: func() Instance {
+			return WrapModel(&testModel{})
+		},
+	})
+
+	m := NewModel(reg)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// 1. Mouse wheel down in sidebar moves selection
+	m.Update(tea.MouseWheelMsg(tea.Mouse{X: 10, Y: 10, Button: tea.MouseWheelDown}))
+	if m.ActiveStory() == nil || m.ActiveStory().ID != "story-2" {
+		t.Errorf("expected mouse wheel down in sidebar to navigate to story-2, got %v", m.ActiveStory())
+	}
+
+	// 2. Mouse wheel up in sidebar moves back
+	m.Update(tea.MouseWheelMsg(tea.Mouse{X: 10, Y: 10, Button: tea.MouseWheelUp}))
+	if m.ActiveStory() == nil || m.ActiveStory().ID != "story-1" {
+		t.Errorf("expected mouse wheel up in sidebar to navigate to story-1, got %v", m.ActiveStory())
+	}
+
+	// 3. Switch to source code tab and verify mouse wheel scrolls source code
+	m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+	if m.ActiveTab() != TabSourceCode {
+		t.Fatalf("expected active tab SourceCode")
+	}
+
+	m.Update(tea.MouseWheelMsg(tea.Mouse{X: 50, Y: 10, Button: tea.MouseWheelDown}))
+	if m.sourceScroll != 3 {
+		t.Errorf("expected sourceScroll to be 3 after wheel down, got %d", m.sourceScroll)
+	}
+
+	m.Update(tea.MouseWheelMsg(tea.Mouse{X: 50, Y: 10, Button: tea.MouseWheelUp}))
+	if m.sourceScroll != 0 {
+		t.Errorf("expected sourceScroll to be 0 after wheel up, got %d", m.sourceScroll)
+	}
+
+	// 4. Verify no line in full output exceeds width (100) or contains \r
+	view := m.RenderViewString()
+	lines := strings.Split(view, "\n")
+	for row, l := range lines {
+		if strings.Contains(l, "\r") {
+			t.Errorf("row %d contains forbidden carriage return \\r: %q", row, l)
+		}
+		w := ansi.StringWidth(l)
+		if w > 100 {
+			t.Errorf("row %d visible width %d exceeds layout.TotalWidth 100: %q", row, w, l)
+		}
 	}
 }

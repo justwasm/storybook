@@ -16,7 +16,7 @@ const (
 	TabArchitectureInfo
 )
 
-// RenderCanvas draws the preview canvas area with breadcrumb header, component viewport, and controls bar.
+// RenderCanvas draws the preview canvas area with breadcrumb header, component viewport, and bottom controls bar.
 func RenderCanvas(story *Story, activeTab ViewTab, stateIdx int, interactive bool, theme Theme, viewContent string, sourceCode string, sourceScroll int, copyNotice string, width, height int) string {
 	if story == nil {
 		return renderEmptyCanvas(width, height)
@@ -24,7 +24,7 @@ func RenderCanvas(story *Story, activeTab ViewTab, stateIdx int, interactive boo
 
 	var lines []string
 
-	// 1. Breadcrumb & upstream header bar (Row 0)
+	// 1. Clean, minimal breadcrumb & upstream header bar (Row 0)
 	var focusIcon string
 	var focusHint string
 	if interactive {
@@ -37,20 +37,13 @@ func RenderCanvas(story *Story, activeTab ViewTab, stateIdx int, interactive boo
 
 	catStr := dim(string(story.Category) + " > ")
 	nameStr := bold(cyan(story.Name))
-	levelBadge := ""
-	if story.Level != "" {
-		levelBadge = " " + yellow(story.Level.ShortTag())
-	}
 	pathStr := ""
 	if story.UpstreamRef != "" {
 		pathStr = dim("[" + story.UpstreamRef + "]")
 	}
 
-	headerLeft := " " + focusIcon + catStr + nameStr + levelBadge + " " + focusHint
+	headerLeft := " " + focusIcon + catStr + nameStr + " " + focusHint
 	headerRight := pathStr + " "
-	if activeTab == TabSourceCode {
-		headerRight = dim("[Scroll: ↑↓/PgDn/Wheel]") + " " + pathStr + " "
-	}
 
 	headerLeftW := ansi.StringWidth(headerLeft)
 	headerRightW := ansi.StringWidth(headerRight)
@@ -99,9 +92,15 @@ func RenderCanvas(story *Story, activeTab ViewTab, stateIdx int, interactive boo
 	lines = append(lines, dim(strings.Repeat("─", width)))
 
 	// 4. Controls & States line (Row height - 1)
+	// Tabs and State indicators live cleanly on the bottom row
 	tabDemo := "[1] Live Demo"
 	tabSource := "[2] Source Code"
 	tabInfo := "[3] Architecture & Info"
+	if width < 80 {
+		tabDemo = "[1] Demo"
+		tabSource = "[2] Source"
+		tabInfo = "[3] Info"
+	}
 
 	switch activeTab {
 	case TabLiveDemo:
@@ -120,24 +119,28 @@ func RenderCanvas(story *Story, activeTab ViewTab, stateIdx int, interactive boo
 
 	tabsBar := " " + tabDemo + "  " + tabSource + "  " + tabInfo
 
-	// If there are state presets, append them
+	// If there are state presets, append them here
 	if len(story.States) > 0 && activeTab == TabLiveDemo {
 		stateBadge := fmt.Sprintf("State: [%d/%d] %s", stateIdx+1, len(story.States), story.States[stateIdx].Name)
 		tabsBar += "  " + yellow(stateBadge)
 	}
 
+	// Move Theme tag to the bottom right controls bar, keeping top header clean
+	themePill := cyan(fmt.Sprintf("[%s (t)]", theme.Name))
 	modeBadge := ""
 	if interactive {
-		if activeTab == TabSourceCode {
-			modeBadge = green(bold(" ● SOURCE: Auto-Copy | Esc: Back "))
+		if width < 75 {
+			modeBadge = green(bold(" ● INTERACTIVE"))
 		} else {
-			modeBadge = green(bold(" ● INTERACTIVE: Esc to return "))
+			modeBadge = fmt.Sprintf(" %s %s ", themePill, green(bold("● INTERACTIVE: Esc to return")))
 		}
 	} else {
-		if activeTab == TabSourceCode {
-			modeBadge = dim(" ○ [Enter: Focus | Tab: View | q: Quit] ")
+		if width < 75 {
+			modeBadge = " " + themePill
+		} else if width < 95 {
+			modeBadge = fmt.Sprintf(" %s %s ", themePill, dim("○ [Enter: Focus | q: Quit]"))
 		} else {
-			modeBadge = dim(" ○ [Enter: Focus | Tab: State | /: Filter | q: Quit] ")
+			modeBadge = fmt.Sprintf(" %s %s ", themePill, dim("○ [Enter: Focus | Tab: View | /: Filter | q: Quit]"))
 		}
 	}
 
@@ -162,7 +165,9 @@ func renderSourceCodeLines(sourceCode string, scrollOffset int, copyNotice strin
 		return dim("  (No source code embedded for this component)")
 	}
 
-	expanded := strings.ReplaceAll(sourceCode, "\t", "    ")
+	// Normalize CRLF to LF and expand tabs to 4 spaces
+	cleanCode := strings.ReplaceAll(sourceCode, "\r", "")
+	expanded := strings.ReplaceAll(cleanCode, "\t", "    ")
 	rawLines := strings.Split(expanded, "\n")
 	totalLines := len(rawLines)
 
@@ -181,11 +186,19 @@ func renderSourceCodeLines(sourceCode string, scrollOffset int, copyNotice strin
 		lines = append(lines, green(bold(" "+copyNotice+" ")))
 	}
 
-	for i := 0; i < height-len(lines); i++ {
-		lineIdx := scrollOffset + i
+	// Fix: evaluate remaining lines count once, rendering all available rows
+	remainingRows := height - len(lines)
+	for r := 0; r < remainingRows; r++ {
+		lineIdx := scrollOffset + r
 		if lineIdx < totalLines {
+			codeLine := rawLines[lineIdx]
 			gutter := dim(fmt.Sprintf(gutterFmt, lineIdx+1))
-			lines = append(lines, gutter+rawLines[lineIdx])
+			// Truncate codeLine so that gutter + codeLine never overflows width
+			availableWidth := width - ansi.StringWidth(gutter)
+			if availableWidth > 0 && ansi.StringWidth(codeLine) > availableWidth {
+				codeLine = ansi.Truncate(codeLine, availableWidth, "")
+			}
+			lines = append(lines, gutter+codeLine)
 		} else {
 			lines = append(lines, "")
 		}
