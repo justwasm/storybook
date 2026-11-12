@@ -324,3 +324,189 @@ func TestModel_MouseWheelAndNoLineOverflow(t *testing.T) {
 		}
 	}
 }
+
+type tickerTestModel struct {
+	tickCount int
+	stateIdx  int
+	lastMouse tea.Mouse
+}
+
+func (t *tickerTestModel) Init() tea.Cmd {
+	return func() tea.Msg { return "test-tick-dispatched" }
+}
+
+func (t *tickerTestModel) Update(msg tea.Msg) (Instance, tea.Cmd) {
+	if str, ok := msg.(string); ok && str == "test-tick-dispatched" {
+		t.tickCount++
+	}
+	return t, nil
+}
+
+func (t *tickerTestModel) View() string {
+	return "TickerTestModel"
+}
+
+func (t *tickerTestModel) SetState(idx int) {
+	t.stateIdx = idx
+}
+
+func (t *tickerTestModel) HandleMouse(ev tea.MouseMsg) (tea.Cmd, bool) {
+	t.lastMouse = ev.Mouse()
+	return nil, true
+}
+
+func TestModel_DynamicTickerLifecycle(t *testing.T) {
+	reg := NewRegistry()
+	inst := &tickerTestModel{}
+
+	reg.Register(Story{
+		ID:       "s1",
+		Name:     "Static Story",
+		Category: CategoryBasics,
+		Factory: func() Instance {
+			return WrapModel(&testModel{})
+		},
+	})
+
+	reg.Register(Story{
+		ID:       "s2",
+		Name:     "Ticker Story",
+		Category: CategoryBasics,
+		Factory: func() Instance {
+			return inst
+		},
+	})
+
+	m := NewModel(reg)
+	// Initially on s1
+	if m.ActiveStory().ID != "s1" {
+		t.Fatalf("expected initial story s1, got %s", m.ActiveStory().ID)
+	}
+
+	// Move down to s2
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'j'}))
+	if cmd == nil {
+		t.Fatalf("expected loadActiveStory() to return Init() command for s2, got nil")
+	}
+
+	// Execute command and verify tick message
+	msg := cmd()
+	if str, ok := msg.(string); !ok || str != "test-tick-dispatched" {
+		t.Fatalf("expected tick message, got %+v", msg)
+	}
+
+	// Deliver to model
+	m.Update(msg)
+	if inst.tickCount != 1 {
+		t.Fatalf("expected inst.tickCount == 1, got %d", inst.tickCount)
+	}
+}
+
+func TestModel_DualAxisStateVsTabSwitching(t *testing.T) {
+	reg := NewRegistry()
+	inst := &tickerTestModel{}
+
+	reg.Register(Story{
+		ID:       "multi-state",
+		Name:     "Multi-State Component",
+		Category: CategoryBasics,
+		Level:    LevelAtom,
+		States: []State{
+			{ID: "s0", Name: "State Zero"},
+			{ID: "s1", Name: "State One"},
+			{ID: "s2", Name: "State Two"},
+			{ID: "s3", Name: "State Three"},
+		},
+		Factory: func() Instance {
+			return inst
+		},
+	})
+
+	reg.Register(Story{
+		ID:       "single-state",
+		Name:     "Single State App",
+		Category: CategoryBasics,
+		Factory: func() Instance {
+			return WrapModel(&testModel{})
+		},
+	})
+
+	m := NewModel(reg)
+	// 1. In multi-state story, pressing '2' selects State One (index 1), NOT SourceCode tab!
+	m.Update(tea.KeyPressMsg(tea.Key{Code: '2'}))
+	if m.stateIdx != 1 {
+		t.Fatalf("expected stateIdx == 1, got %d", m.stateIdx)
+	}
+	if inst.stateIdx != 1 {
+		t.Fatalf("expected inst.stateIdx == 1, got %d", inst.stateIdx)
+	}
+	if m.ActiveTab() != TabLiveDemo {
+		t.Fatalf("expected activeTab to remain TabLiveDemo, got %v", m.ActiveTab())
+	}
+
+	// Pressing '4' selects State Three (index 3)
+	m.Update(tea.KeyPressMsg(tea.Key{Code: '4'}))
+	if m.stateIdx != 3 {
+		t.Fatalf("expected stateIdx == 3, got %d", m.stateIdx)
+	}
+
+	// Pressing 'v' cycles view modality to SourceCode
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'v'}))
+	if m.ActiveTab() != TabSourceCode {
+		t.Fatalf("expected TabSourceCode after pressing v, got %v", m.ActiveTab())
+	}
+
+	// Pressing 'v' again cycles to ArchitectureInfo
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'v'}))
+	if m.ActiveTab() != TabArchitectureInfo {
+		t.Fatalf("expected TabArchitectureInfo after pressing v, got %v", m.ActiveTab())
+	}
+
+	// Pressing 'd' jumps back to LiveDemo
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'd'}))
+	if m.ActiveTab() != TabLiveDemo {
+		t.Fatalf("expected TabLiveDemo after pressing d, got %v", m.ActiveTab())
+	}
+
+	// 2. Now navigate to single-state story
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'j'}))
+	if m.ActiveStory().ID != "single-state" {
+		t.Fatalf("expected active story single-state, got %s", m.ActiveStory().ID)
+	}
+
+	// In single-state story, pressing '2' selects TabSourceCode
+	m.Update(tea.KeyPressMsg(tea.Key{Code: '2'}))
+	if m.ActiveTab() != TabSourceCode {
+		t.Fatalf("expected TabSourceCode for single-state story pressing '2', got %v", m.ActiveTab())
+	}
+}
+
+func TestModel_MouseCoordinateTranslation(t *testing.T) {
+	reg := NewRegistry()
+	inst := &tickerTestModel{}
+
+	reg.Register(Story{
+		ID:       "mouse-story",
+		Name:     "Mouse Story",
+		Category: CategoryInput,
+		Factory: func() Instance {
+			return inst
+		},
+	})
+
+	m := NewModel(reg)
+	m.width = 100
+	m.height = 30
+	layout := ComputeLayout(m.width, m.height)
+
+	// Screen coords: sidebarWidth + 1 + 10, row 3 + 5
+	screenX := layout.SidebarWidth + 1 + 10
+	screenY := 3 + 5
+
+	m.Update(tea.MouseClickMsg(tea.Mouse{X: screenX, Y: screenY, Button: tea.MouseLeft}))
+
+	// Verify inst received local coords (10, 5)
+	if inst.lastMouse.X != 10 || inst.lastMouse.Y != 5 {
+		t.Fatalf("expected translated mouse coords (10, 5), got (%d, %d)", inst.lastMouse.X, inst.lastMouse.Y)
+	}
+}

@@ -37,12 +37,16 @@ func RenderCanvas(story *Story, activeTab ViewTab, stateIdx int, interactive boo
 
 	catStr := dim(string(story.Category) + " > ")
 	nameStr := bold(cyan(story.Name))
+	levelBadge := ""
+	if story.Level != "" {
+		levelBadge = " " + yellow(story.Level.LevelTag())
+	}
 	pathStr := ""
 	if story.UpstreamRef != "" {
 		pathStr = dim("[" + story.UpstreamRef + "]")
 	}
 
-	headerLeft := " " + focusIcon + catStr + nameStr + " " + focusHint
+	headerLeft := " " + focusIcon + catStr + nameStr + levelBadge + " " + focusHint
 	headerRight := pathStr + " "
 
 	headerLeftW := ansi.StringWidth(headerLeft)
@@ -93,64 +97,81 @@ func RenderCanvas(story *Story, activeTab ViewTab, stateIdx int, interactive boo
 
 	// 4. Controls & States line (Row height - 1)
 	// Tabs and State indicators live cleanly on the bottom row
-	tabDemo := "[1] Live Demo"
-	tabSource := "[2] Source Code"
-	tabInfo := "[3] Architecture & Info"
-	if width < 80 {
-		tabDemo = "[1] Demo"
-		tabSource = "[2] Source"
-		tabInfo = "[3] Info"
-	}
+	var controlsLeft string
+	hasStates := len(story.States) > 1
 
-	switch activeTab {
-	case TabLiveDemo:
-		tabDemo = reverse(bold(" " + tabDemo + " "))
-		tabSource = dim(tabSource)
-		tabInfo = dim(tabInfo)
-	case TabSourceCode:
-		tabDemo = dim(tabDemo)
-		tabSource = reverse(bold(" " + tabSource + " "))
-		tabInfo = dim(tabInfo)
-	case TabArchitectureInfo:
-		tabDemo = dim(tabDemo)
-		tabSource = dim(tabSource)
-		tabInfo = reverse(bold(" " + tabInfo + " "))
-	}
-
-	tabsBar := " " + tabDemo + "  " + tabSource + "  " + tabInfo
-
-	// If there are state presets, append them here
-	if len(story.States) > 0 && activeTab == TabLiveDemo {
-		stateBadge := fmt.Sprintf("State: [%d/%d] %s", stateIdx+1, len(story.States), story.States[stateIdx].Name)
-		tabsBar += "  " + yellow(stateBadge)
-	}
-
-	// Move Theme tag to the bottom right controls bar, keeping top header clean
-	themePill := cyan(fmt.Sprintf("[%s (t)]", theme.Name))
-	modeBadge := ""
-	if interactive {
-		if width < 75 {
-			modeBadge = green(bold(" ● INTERACTIVE"))
-		} else {
-			modeBadge = fmt.Sprintf(" %s %s ", themePill, green(bold("● INTERACTIVE: Esc to return")))
+	if hasStates && activeTab == TabLiveDemo {
+		// Render state buttons: [1] PresetA  [2] PresetB  [3] PresetC
+		var stateBadges []string
+		for i, st := range story.States {
+			badge := fmt.Sprintf("[%d] %s", i+1, st.Name)
+			if i == stateIdx {
+				badge = reverse(bold(" " + badge + " "))
+			} else {
+				badge = dim(badge)
+			}
+			stateBadges = append(stateBadges, badge)
 		}
+		controlsLeft = " " + strings.Join(stateBadges, "  ")
+	} else if activeTab == TabSourceCode {
+		controlsLeft = " " + reverse(bold(" [v/d] Back to Demo ")) + "  " + dim("[y: Copy All | Drag: Select Lines]")
+	} else if activeTab == TabArchitectureInfo {
+		controlsLeft = " " + reverse(bold(" [v/d] Back to Demo ")) + "  " + dim("[s: Source Code]")
 	} else {
-		if width < 75 {
-			modeBadge = " " + themePill
-		} else if width < 95 {
-			modeBadge = fmt.Sprintf(" %s %s ", themePill, dim("○ [Enter: Focus | q: Quit]"))
+		// Standalone story or single-state story: render the 3 tabs [1] Demo  [2] Source  [3] Info
+		tabDemo := "[1] Live Demo"
+		tabSource := "[2] Source Code"
+		tabInfo := "[3] Architecture & Info"
+		if width < 85 {
+			tabDemo = "[1] Demo"
+			tabSource = "[2] Source"
+			tabInfo = "[3] Info"
+		}
+
+		switch activeTab {
+		case TabLiveDemo:
+			tabDemo = reverse(bold(" " + tabDemo + " "))
+			tabSource = dim(tabSource)
+			tabInfo = dim(tabInfo)
+		case TabSourceCode:
+			tabDemo = dim(tabDemo)
+			tabSource = reverse(bold(" " + tabSource + " "))
+			tabInfo = dim(tabInfo)
+		case TabArchitectureInfo:
+			tabDemo = dim(tabDemo)
+			tabSource = dim(tabSource)
+			tabInfo = reverse(bold(" " + tabInfo + " "))
+		}
+		controlsLeft = " " + tabDemo + "  " + tabSource + "  " + tabInfo
+	}
+
+	// Move Theme tag and Mode indicators to the right
+	themePill := cyan(fmt.Sprintf("[%s (t)]", theme.Name))
+	var modeBadge string
+
+	if interactive {
+		modeBadge = fmt.Sprintf(" %s %s ", themePill, green(bold("● INTERACTIVE: Esc to return")))
+	} else if hasStates && activeTab == TabLiveDemo {
+		viewPill := dim("│ View: [v/s] Source  [v/i] Info")
+		if width < 115 {
+			viewPill = dim("│ [v: View]")
+		}
+		modeBadge = fmt.Sprintf(" %s %s %s ", viewPill, themePill, dim("○ [1..9: State | Enter: Focus | q: Quit]"))
+	} else {
+		if width < 85 {
+			modeBadge = fmt.Sprintf(" %s ", themePill)
 		} else {
-			modeBadge = fmt.Sprintf(" %s %s ", themePill, dim("○ [Enter: Focus | Tab: View | /: Filter | q: Quit]"))
+			modeBadge = fmt.Sprintf(" %s %s ", themePill, dim("○ [Enter: Focus | Tab: Cycle | q: Quit]"))
 		}
 	}
 
-	tabsW := ansi.StringWidth(tabsBar)
+	tabsW := ansi.StringWidth(controlsLeft)
 	modeW := ansi.StringWidth(modeBadge)
 	ctrlGap := width - tabsW - modeW
 	if ctrlGap < 1 {
 		ctrlGap = 1
 	}
-	controlsLine := tabsBar + strings.Repeat(" ", ctrlGap) + modeBadge
+	controlsLine := controlsLeft + strings.Repeat(" ", ctrlGap) + modeBadge
 	lines = append(lines, controlsLine)
 
 	if len(lines) > height {
@@ -244,12 +265,22 @@ func renderInfoContent(story *Story, width, height int) string {
 		lines = append(lines, "")
 	}
 
+	if len(story.KeyFeatures) > 0 {
+		lines = append(lines, bold(blue("  ── Key Features ──")))
+		for _, kf := range story.KeyFeatures {
+			lines = append(lines, fmt.Sprintf("  • %s", kf))
+		}
+		lines = append(lines, "")
+	}
+
 	lines = append(lines, dim("  ── Shortcuts ──"))
-	lines = append(lines, dim("  • Enter / l: Enter interactive playground"))
-	lines = append(lines, dim("  • 1 / 2 / 3: Switch view tabs (Demo, Source, Info)"))
-	lines = append(lines, dim("  • Tab:       Cycle state presets or tabs"))
-	lines = append(lines, dim("  • t:         Switch theme"))
-	lines = append(lines, dim("  • Esc:       Exit playground back to sidebar"))
+	lines = append(lines, dim("  • Enter / l: Enter interactive playground mode"))
+	lines = append(lines, dim("  • 1..9:      Directly select component state preset (when available)"))
+	lines = append(lines, dim("  • Tab:       Cycle state presets or view tabs"))
+	lines = append(lines, dim("  • v / V:     Cycle view modality (Live Demo -> Source Code -> Info)"))
+	lines = append(lines, dim("  • d, s, i:   Jump to Demo, Source, or Architecture Info"))
+	lines = append(lines, dim("  • t / T:     Cycle visual color theme"))
+	lines = append(lines, dim("  • Esc:       Exit interactive playground back to sidebar"))
 
 	return strings.Join(lines, "\n")
 }

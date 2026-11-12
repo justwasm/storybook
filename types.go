@@ -94,7 +94,6 @@ type Resizable interface {
 
 // Stateful is an optional interface for instances that support state variations.
 type Stateful interface {
-	States() []State
 	SetState(stateIndex int)
 }
 
@@ -128,6 +127,7 @@ type Story struct {
 	UpstreamRef string                  // Upstream symbol or file path
 	SourceCode  string                  // Source code content for the source tab
 	Doc         string                  // Documentation / architecture explanation
+	KeyFeatures []string                // Bullet points or key capabilities
 	States      []State                 // Preset states
 	Factory     func() Instance         // Instantiation factory
 }

@@ -191,12 +191,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "up", "k":
-		m.moveNav(-1)
-		return m, nil
+		cmd := m.moveNav(-1)
+		return m, cmd
 
 	case "down", "j":
-		m.moveNav(1)
-		return m, nil
+		cmd := m.moveNav(1)
+		return m, cmd
 
 	case "enter", "l":
 		items := m.registry.VisibleNavItems(m.filterQuery)
@@ -210,25 +210,81 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "1":
+	case "v", "V":
+		m.activeTab = (m.activeTab + 1) % 3
+		return m, nil
+
+	case "d", "D":
 		m.activeTab = TabLiveDemo
 		return m, nil
-	case "2":
+
+	case "s", "S":
 		m.activeTab = TabSourceCode
 		return m, nil
-	case "3":
+
+	case "i", "I":
 		m.activeTab = TabArchitectureInfo
 		return m, nil
 
+	case "y", "Y":
+		if m.activeTab == TabSourceCode {
+			m.copyAllSourceText()
+			return m, nil
+		}
+		return m, nil
+
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		hasStoryStates := m.activeStory != nil && len(m.activeStory.States) > 1
+		if hasStoryStates {
+			idx := int(key[0] - '1')
+			if idx < len(m.activeStory.States) {
+				m.stateIdx = idx
+				if s, ok := m.activeInstance.(Stateful); ok {
+					s.SetState(m.stateIdx)
+				}
+				m.activeTab = TabLiveDemo
+			}
+			return m, nil
+		}
+
+		// When story has no states (e.g. standalone showcase), 1/2/3 switch tabs
+		switch key {
+		case "1":
+			m.activeTab = TabLiveDemo
+		case "2":
+			m.activeTab = TabSourceCode
+		case "3":
+			m.activeTab = TabArchitectureInfo
+		}
+		return m, nil
+
 	case "tab":
-		// If story has state presets in Live Demo, cycle states; otherwise cycle tabs
-		if m.activeTab == TabLiveDemo && m.activeStory != nil && len(m.activeStory.States) > 1 {
+		hasStoryStates := m.activeStory != nil && len(m.activeStory.States) > 1
+		if hasStoryStates && m.activeTab == TabLiveDemo {
 			m.stateIdx = (m.stateIdx + 1) % len(m.activeStory.States)
 			if s, ok := m.activeInstance.(Stateful); ok {
 				s.SetState(m.stateIdx)
 			}
 		} else {
 			m.activeTab = (m.activeTab + 1) % 3
+		}
+		return m, nil
+
+	case "shift+tab":
+		hasStoryStates := m.activeStory != nil && len(m.activeStory.States) > 1
+		if hasStoryStates && m.activeTab == TabLiveDemo {
+			m.stateIdx = (m.stateIdx - 1 + len(m.activeStory.States)) % len(m.activeStory.States)
+			if s, ok := m.activeInstance.(Stateful); ok {
+				s.SetState(m.stateIdx)
+			}
+		} else {
+			m.activeTab = (m.activeTab + 2) % 3
+		}
+		return m, nil
+
+	case "r", "R", " ":
+		if re, ok := m.activeInstance.(Restarter); ok {
+			return m, re.Restart()
 		}
 		return m, nil
 
@@ -259,10 +315,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) moveNav(delta int) {
+func (m *Model) moveNav(delta int) tea.Cmd {
 	items := m.registry.VisibleNavItems(m.filterQuery)
 	if len(items) == 0 {
-		return
+		return nil
 	}
 
 	newIdx := m.activeIdx + delta
@@ -294,17 +350,18 @@ func (m *Model) moveNav(delta int) {
 		m.stateIdx = 0
 		m.sourceScroll = 0
 		m.copyNotice = ""
-		m.loadActiveStory()
+		return m.loadActiveStory()
 	}
+	return nil
 }
 
-func (m *Model) adjustSelectionAfterFilter() {
+func (m *Model) adjustSelectionAfterFilter() tea.Cmd {
 	items := m.registry.VisibleNavItems(m.filterQuery)
 	if len(items) == 0 {
 		m.activeIdx = -1
 		m.activeStory = nil
 		m.activeInstance = nil
-		return
+		return nil
 	}
 
 	for i, it := range items {
@@ -313,17 +370,17 @@ func (m *Model) adjustSelectionAfterFilter() {
 			m.activeStory = it.Story
 			m.stateIdx = 0
 			m.sourceScroll = 0
-			m.loadActiveStory()
-			return
+			return m.loadActiveStory()
 		}
 	}
 	m.activeIdx = 0
+	return nil
 }
 
-func (m *Model) loadActiveStory() {
+func (m *Model) loadActiveStory() tea.Cmd {
 	if m.activeStory == nil || m.activeStory.Factory == nil {
 		m.activeInstance = nil
-		return
+		return nil
 	}
 
 	m.activeInstance = m.activeStory.Factory()
@@ -332,6 +389,14 @@ func (m *Model) loadActiveStory() {
 	if r, ok := m.activeInstance.(Resizable); ok {
 		r.SetSize(layout.CanvasWidth, layout.CanvasContentHeight)
 	}
+	if s, ok := m.activeInstance.(Stateful); ok {
+		s.SetState(m.stateIdx)
+	}
+
+	if initier, ok := m.activeInstance.(Initializer); ok {
+		return initier.Init()
+	}
+	return nil
 }
 
 func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
@@ -343,11 +408,11 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if mouse.X < layout.SidebarWidth {
 		switch mouse.Button {
 		case tea.MouseWheelUp:
-			m.moveNav(-1)
-			return m, nil
+			cmd := m.moveNav(-1)
+			return m, cmd
 		case tea.MouseWheelDown:
-			m.moveNav(1)
-			return m, nil
+			cmd := m.moveNav(1)
+			return m, cmd
 		case tea.MouseLeft:
 			// Row 0 is top title, row 1 is header ("STORIES"), row 2 is divider ("───").
 			// Items start at screen Y = 3.
@@ -364,7 +429,8 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 						m.stateIdx = 0
 						m.sourceScroll = 0
 						m.copyNotice = ""
-						m.loadActiveStory()
+						cmd := m.loadActiveStory()
+						return m, cmd
 					}
 				}
 			}
@@ -373,39 +439,49 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// 2. Mouse in Right Canvas (mouse.X >= layout.SidebarWidth)
-	// If in Live Demo tab and interactive, forward mouse to active instance
-	if m.activeTab == TabLiveDemo && m.interactive && m.activeInstance != nil {
-		if mh, ok := m.activeInstance.(MouseHandler); ok {
-			cmd, _ := mh.HandleMouse(msg)
-			return m, cmd
-		}
-	}
-
-	// Clicking canvas in Live Demo enters interactive mode
-	if m.activeTab == TabLiveDemo && !m.interactive && mouse.Button == tea.MouseLeft {
-		if mouse.Y >= 3 && mouse.Y < m.height-2 {
-			m.interactive = true
-			return m, nil
-		}
-	}
-
-	// Clicking bottom tabs row:
-	if mouse.Y >= m.height-2 && mouse.Button == tea.MouseLeft {
+	// 2. Mouse over bottom controls line (mouse.Y >= m.height - 1)
+	if mouse.Y >= m.height-1 && mouse.Button == tea.MouseLeft {
 		relX := mouse.X - layout.SidebarWidth - 1
-		if relX >= 0 && relX < 16 {
-			m.activeTab = TabLiveDemo
-			return m, nil
-		} else if relX >= 16 && relX < 34 {
-			m.activeTab = TabSourceCode
-			return m, nil
-		} else if relX >= 34 && relX < 58 {
-			m.activeTab = TabArchitectureInfo
-			return m, nil
+		hasStates := m.activeStory != nil && len(m.activeStory.States) > 1
+
+		if hasStates && m.activeTab == TabLiveDemo {
+			curX := 1
+			for i, st := range m.activeStory.States {
+				badgeLen := len(fmt.Sprintf("[%d] %s", i+1, st.Name)) + 4
+				if relX >= curX && relX < curX+badgeLen {
+					m.stateIdx = i
+					if s, ok := m.activeInstance.(Stateful); ok {
+						s.SetState(m.stateIdx)
+					}
+					return m, nil
+				}
+				curX += badgeLen
+			}
+			if relX >= curX {
+				m.activeTab = (m.activeTab + 1) % 3
+				return m, nil
+			}
+		} else if m.activeTab == TabSourceCode || m.activeTab == TabArchitectureInfo {
+			if relX >= 0 && relX < 24 {
+				m.activeTab = TabLiveDemo
+				return m, nil
+			}
+		} else {
+			if relX >= 0 && relX < 16 {
+				m.activeTab = TabLiveDemo
+				return m, nil
+			} else if relX >= 16 && relX < 34 {
+				m.activeTab = TabSourceCode
+				return m, nil
+			} else if relX >= 34 && relX < 60 {
+				m.activeTab = TabArchitectureInfo
+				return m, nil
+			}
 		}
+		return m, nil
 	}
 
-	// Mouse Wheel in Canvas:
+	// 3. Mouse Wheel in Right Canvas
 	switch mouse.Button {
 	case tea.MouseWheelUp:
 		if m.activeTab == TabSourceCode {
@@ -422,28 +498,53 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Drag-to-select and copy text in Source Code tab
-	if m.activeTab == TabSourceCode && m.activeStory != nil {
-		switch msg.(type) {
-		case tea.MouseClickMsg:
-			if mouse.Button == tea.MouseLeft {
-				m.selecting = true
-				m.hasSelection = false
-				m.selStartLine = m.sourceScroll + (mouse.Y - 2)
-				m.selEndLine = m.selStartLine
-				return m, nil
+	// 4. Mouse inside Component Viewport (X > SidebarWidth, Y in [3 .. m.height - 2])
+	if mouse.X > layout.SidebarWidth && mouse.Y >= 3 && mouse.Y < m.height-1 {
+		originX := layout.SidebarWidth + 1
+		originY := 3
+		localMsg := TranslateMouseMsg(msg, -originX, -originY)
+
+		if m.activeTab == TabLiveDemo && m.activeInstance != nil {
+			if mouse.Button == tea.MouseLeft && !m.interactive {
+				m.interactive = true
 			}
-		case tea.MouseMotionMsg:
-			if m.selecting {
-				m.selEndLine = m.sourceScroll + (mouse.Y - 2)
-				return m, nil
+
+			if mh, ok := m.activeInstance.(MouseHandler); ok {
+				cmd, handled := mh.HandleMouse(localMsg)
+				if handled {
+					return m, cmd
+				}
 			}
-		case tea.MouseReleaseMsg:
-			if m.selecting {
-				m.selecting = false
-				m.selEndLine = m.sourceScroll + (mouse.Y - 2)
-				m.copySelectedSourceText()
-				return m, nil
+			if m.interactive {
+				var cmd tea.Cmd
+				m.activeInstance, cmd = m.activeInstance.Update(localMsg)
+				return m, cmd
+			}
+		}
+
+		// Drag-to-select and copy text in Source Code tab
+		if m.activeTab == TabSourceCode && m.activeStory != nil {
+			switch msg.(type) {
+			case tea.MouseClickMsg:
+				if mouse.Button == tea.MouseLeft {
+					m.selecting = true
+					m.hasSelection = false
+					m.selStartLine = m.sourceScroll + (mouse.Y - 3)
+					m.selEndLine = m.selStartLine
+					return m, nil
+				}
+			case tea.MouseMotionMsg:
+				if m.selecting {
+					m.selEndLine = m.sourceScroll + (mouse.Y - 3)
+					return m, nil
+				}
+			case tea.MouseReleaseMsg:
+				if m.selecting {
+					m.selecting = false
+					m.selEndLine = m.sourceScroll + (mouse.Y - 3)
+					m.copySelectedSourceText()
+					return m, nil
+				}
 			}
 		}
 	}
@@ -481,6 +582,21 @@ func (m *Model) copySelectedSourceText() {
 			_ = clipboard.WriteAll(selectedText)
 			m.copyNotice = fmt.Sprintf("✓ Copied %d lines to clipboard", end-start+1)
 		}
+	}
+}
+
+func (m *Model) copyAllSourceText() {
+	src := ""
+	if m.activeStory != nil {
+		src = m.activeStory.SourceCode
+		if src == "" && m.activeStory.UpstreamRef != "" {
+			src = loadUpstreamSource(m.activeStory.UpstreamRef)
+		}
+	}
+	if strings.TrimSpace(src) != "" {
+		_ = clipboard.WriteAll(src)
+		lines := strings.Split(src, "\n")
+		m.copyNotice = fmt.Sprintf("✓ Copied all %d lines to clipboard", len(lines))
 	}
 }
 

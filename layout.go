@@ -3,6 +3,7 @@ package storybook
 import (
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -123,4 +124,23 @@ func PadOrTruncateANSI(s string, w int) string {
 		return s + strings.Repeat(" ", w-sw)
 	}
 	return s
+}
+
+// TranslateMouseMsg returns a new tea.MouseMsg with coordinates offset by (dx, dy).
+func TranslateMouseMsg(msg tea.MouseMsg, dx, dy int) tea.MouseMsg {
+	m := msg.Mouse()
+	m.X += dx
+	m.Y += dy
+	switch msg.(type) {
+	case tea.MouseClickMsg:
+		return tea.MouseClickMsg(m)
+	case tea.MouseReleaseMsg:
+		return tea.MouseReleaseMsg(m)
+	case tea.MouseWheelMsg:
+		return tea.MouseWheelMsg(m)
+	case tea.MouseMotionMsg:
+		return tea.MouseMotionMsg(m)
+	default:
+		return tea.MouseMotionMsg(m)
+	}
 }
