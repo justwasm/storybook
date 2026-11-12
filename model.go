@@ -157,21 +157,23 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.searching = false
 			m.filterQuery = ""
-			m.adjustSelectionAfterFilter()
-			return m, nil
+			cmd := m.adjustSelectionAfterFilter()
+			return m, cmd
 		case "enter":
 			m.searching = false
 			return m, nil
 		case "backspace":
 			if len(m.filterQuery) > 0 {
 				m.filterQuery = m.filterQuery[:len(m.filterQuery)-1]
-				m.adjustSelectionAfterFilter()
+				cmd := m.adjustSelectionAfterFilter()
+				return m, cmd
 			}
 			return m, nil
 		default:
 			if len(key) == 1 {
 				m.filterQuery += key
-				m.adjustSelectionAfterFilter()
+				cmd := m.adjustSelectionAfterFilter()
+				return m, cmd
 			}
 			return m, nil
 		}
