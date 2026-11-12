@@ -2,6 +2,8 @@ package storybook
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/atotto/clipboard"
@@ -442,6 +444,9 @@ func (m *Model) RenderViewString() string {
 		src := ""
 		if m.activeStory != nil {
 			src = m.activeStory.SourceCode
+			if src == "" && m.activeStory.UpstreamRef != "" {
+				src = loadUpstreamSource(m.activeStory.UpstreamRef)
+			}
 		}
 		content = canvas.RenderSourceCode(src, m.sourceScroll, m.copyNotice, canvasH)
 	case TabArchitectureInfo:
@@ -489,4 +494,24 @@ func (m *Model) ActiveStory() *Story {
 // ActiveTab returns the currently active ViewTab.
 func (m *Model) ActiveTab() ViewTab {
 	return m.activeTab
+}
+
+func loadUpstreamSource(ref string) string {
+	candidates := []string{
+		ref,
+		filepath.Join(ref, "main.go"),
+		filepath.Join(ref, "plugin.go"),
+	}
+
+	// Try relative from current dir, and upwards up to 5 levels
+	prefixes := []string{"", ".", "..", "../..", "../../.."}
+	for _, pref := range prefixes {
+		for _, cand := range candidates {
+			target := filepath.Join(pref, cand)
+			if data, err := os.ReadFile(target); err == nil && len(data) > 0 {
+				return string(data)
+			}
+		}
+	}
+	return ""
 }
