@@ -1,8 +1,23 @@
 package storybook
 
 import (
+	"reflect"
+
 	tea "charm.land/bubbletea/v2"
 )
+
+var teaQuitPtr = reflect.ValueOf(tea.Quit).Pointer()
+
+// isTeaQuit checks whether a tea.Cmd directly points to tea.Quit without executing it.
+func isTeaQuit(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	return reflect.ValueOf(cmd).Pointer() == teaQuitPtr
+}
+
+// MockQuitMsg indicates an inner model dispatched a quit command.
+type MockQuitMsg struct{}
 
 // WrapOption configures model adaptation options.
 type WrapOption func(*ModelAdapter)
@@ -59,6 +74,34 @@ func WrapModel(m tea.Model, opts ...WrapOption) *ModelAdapter {
 	return a
 }
 
+// wrapCmd safely wraps a tea.Cmd so that tea.QuitMsg is intercepted asynchronously
+// without executing blocking commands or sleeping on the UI event thread.
+func (a *ModelAdapter) wrapCmd(cmd tea.Cmd) tea.Cmd {
+	if cmd == nil {
+		return nil
+	}
+	if isTeaQuit(cmd) {
+		return func() tea.Msg {
+			return MockQuitMsg{}
+		}
+	}
+	return func() tea.Msg {
+		msg := cmd()
+		switch m := msg.(type) {
+		case tea.QuitMsg:
+			return MockQuitMsg{}
+		case tea.BatchMsg:
+			wrapped := make(tea.BatchMsg, len(m))
+			for i, c := range m {
+				wrapped[i] = a.wrapCmd(c)
+			}
+			return wrapped
+		default:
+			return msg
+		}
+	}
+}
+
 // Init initializes the inner model and dispatches any initial commands or focus triggers.
 func (a *ModelAdapter) Init() tea.Cmd {
 	if a.inner == nil {
@@ -69,11 +112,19 @@ func (a *ModelAdapter) Init() tea.Cmd {
 		a.SetSize(a.width, a.height)
 	}
 	if cmd := a.inner.Init(); cmd != nil {
-		cmds = append(cmds, cmd)
+		if isTeaQuit(cmd) {
+			a.quitting = true
+		} else {
+			cmds = append(cmds, a.wrapCmd(cmd))
+		}
 	}
 	if a.autoFocus {
 		if cmd := a.triggerFocus(); cmd != nil {
-			cmds = append(cmds, cmd)
+			if isTeaQuit(cmd) {
+				a.quitting = true
+			} else {
+				cmds = append(cmds, a.wrapCmd(cmd))
+			}
 		}
 	}
 	if len(cmds) == 0 {
@@ -99,6 +150,12 @@ func (a *ModelAdapter) triggerFocus() tea.Cmd {
 // Update handles messages, intercepts tea.Quit, and manages restart triggers.
 func (a *ModelAdapter) Update(msg tea.Msg) (Instance, tea.Cmd) {
 	if a.inner == nil {
+		return a, nil
+	}
+
+	// 0. Intercept MockQuitMsg delivered from background commands
+	if _, ok := msg.(MockQuitMsg); ok {
+		a.quitting = true
 		return a, nil
 	}
 
@@ -129,16 +186,15 @@ func (a *ModelAdapter) Update(msg tea.Msg) (Instance, tea.Cmd) {
 	newInner, cmd := a.inner.Update(msg)
 	a.inner = newInner
 
-	// 4. Check if inner model attempted to quit (tea.Quit simulated)
+	// 4. Check if inner model returned tea.Quit directly
 	if cmd != nil {
-		// Detect tea.Quit command safely by checking tea.Quit() behavior
-		if isQuitCmd(cmd) {
+		if isTeaQuit(cmd) {
 			a.quitting = true
 			return a, nil
 		}
 	}
 
-	return a, cmd
+	return a, a.wrapCmd(cmd)
 }
 
 // View renders the inner model's view, appending the MockQuit banner if exited.
@@ -189,7 +245,12 @@ func (a *ModelAdapter) Restart() tea.Cmd {
 		return a.Init()
 	}
 	if r, ok := a.inner.(Restarter); ok {
-		return r.Restart()
+		cmd := r.Restart()
+		if isTeaQuit(cmd) {
+			a.quitting = true
+			return nil
+		}
+		return a.wrapCmd(cmd)
 	}
 	return a.Init()
 }
@@ -203,7 +264,12 @@ func (a *ModelAdapter) HandleKey(key tea.KeyMsg) (tea.Cmd, bool) {
 		_ = a.triggerFocus()
 	}
 	if h, ok := a.inner.(InteractiveHandler); ok {
-		return h.HandleKey(key)
+		cmd, handled := h.HandleKey(key)
+		if isTeaQuit(cmd) {
+			a.quitting = true
+			return nil, handled
+		}
+		return a.wrapCmd(cmd), handled
 	}
 	var cmd tea.Cmd
 	_, cmd = a.Update(key)
@@ -216,24 +282,16 @@ func (a *ModelAdapter) HandleMouse(ev tea.MouseMsg) (tea.Cmd, bool) {
 		return nil, false
 	}
 	if h, ok := a.inner.(MouseHandler); ok {
-		return h.HandleMouse(ev)
+		cmd, handled := h.HandleMouse(ev)
+		if isTeaQuit(cmd) {
+			a.quitting = true
+			return nil, handled
+		}
+		return a.wrapCmd(cmd), handled
 	}
 	var cmd tea.Cmd
 	_, cmd = a.Update(ev)
 	return cmd, true
-}
-
-// isQuitCmd checks whether a tea.Cmd represents tea.Quit.
-func isQuitCmd(cmd tea.Cmd) bool {
-	if cmd == nil {
-		return false
-	}
-	// Execute the command in an isolated manner: tea.Quit returns tea.QuitMsg{}
-	msg := cmd()
-	if _, ok := msg.(tea.QuitMsg); ok {
-		return true
-	}
-	return false
 }
 
 // IsQuitting returns whether the adapter is currently in mock-quit state.

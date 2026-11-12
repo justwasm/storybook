@@ -245,6 +245,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					s.SetState(m.stateIdx)
 				}
 				m.activeTab = TabLiveDemo
+				var cmd tea.Cmd
+				if initier, ok := m.activeInstance.(Initializer); ok {
+					cmd = initier.Init()
+				}
+				return m, cmd
 			}
 			return m, nil
 		}
@@ -267,6 +272,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if s, ok := m.activeInstance.(Stateful); ok {
 				s.SetState(m.stateIdx)
 			}
+			var cmd tea.Cmd
+			if initier, ok := m.activeInstance.(Initializer); ok {
+				cmd = initier.Init()
+			}
+			return m, cmd
 		} else {
 			m.activeTab = (m.activeTab + 1) % 3
 		}
@@ -279,6 +289,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if s, ok := m.activeInstance.(Stateful); ok {
 				s.SetState(m.stateIdx)
 			}
+			var cmd tea.Cmd
+			if initier, ok := m.activeInstance.(Initializer); ok {
+				cmd = initier.Init()
+			}
+			return m, cmd
 		} else {
 			m.activeTab = (m.activeTab + 2) % 3
 		}
@@ -455,7 +470,11 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					if s, ok := m.activeInstance.(Stateful); ok {
 						s.SetState(m.stateIdx)
 					}
-					return m, nil
+					var cmd tea.Cmd
+					if initier, ok := m.activeInstance.(Initializer); ok {
+						cmd = initier.Init()
+					}
+					return m, cmd
 				}
 				curX += badgeLen
 			}
